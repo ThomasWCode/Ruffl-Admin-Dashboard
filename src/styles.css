@@ -32,7 +32,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -662,6 +663,72 @@ tbody tr:last-child td {
   margin-top: auto;
 }
 
+.chat-panel {
+  min-height: 620px;
+}
+
+.chat-panel__header {
+  gap: 14px;
+  justify-content: flex-start;
+}
+
+.chat-panel__header > div {
+  margin-left: auto;
+}
+
+.chat-messages {
+  align-content: end;
+  display: grid;
+  flex: 1;
+  gap: 9px;
+  min-height: 440px;
+  padding: 20px;
+}
+
+.chat-message {
+  background: var(--cream);
+  border-radius: 14px 14px 14px 4px;
+  display: grid;
+  gap: 5px;
+  justify-self: start;
+  max-width: min(680px, 82%);
+  padding: 10px 13px;
+}
+
+.chat-message--mine {
+  background: var(--moss);
+  border-radius: 14px 14px 4px;
+  color: white;
+  justify-self: end;
+}
+
+.chat-message small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.chat-message--mine small {
+  color: #d9e8df;
+}
+
+.chat-composer {
+  align-items: flex-end;
+  border-top: 1px solid var(--line);
+  display: flex;
+  gap: 10px;
+  padding: 14px;
+}
+
+.chat-composer textarea {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--ink);
+  flex: 1;
+  min-height: 70px;
+  padding: 11px 13px;
+  resize: vertical;
+}
+
 .notice {
   align-items: center;
   border-radius: 11px;
@@ -940,4 +1007,9 @@ tbody tr:last-child td {
   .login__form-wrap {
     padding: 38px 22px;
   }
+}
+.fatal-error {
+  margin: 15vh auto;
+  max-width: 38rem;
+  padding: 2rem;
 }

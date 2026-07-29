@@ -18,10 +18,11 @@ You do not need prior React, Vite, or GitHub Actions experience to run or deploy
 
 - Admin-only login using the shared backend account system
 - Marketplace totals and recent activity
-- User search, status filtering, warnings, suspension/unsuspension, soft deletion, and guarded permanent deletion
+- User search, status filtering, warnings, suspension/unsuspension, soft deletion, and guarded anonymization
 - Read-only commission and value overview
 - Dispute financial context, assignment, adjudication, and closure
-- Admin support inbox
+- Admin support inbox with start-chat, conversation detail, three-second polling, and replies
+- Sentry browser error reporting and a readable fatal-error fallback
 - Automatic short-lived CSRF token handling for every state-changing action
 - Responsive desktop/mobile layout
 
@@ -77,13 +78,15 @@ The local `.env` should contain:
 VITE_API_URL=http://localhost:3000
 VITE_BASE_PATH=/
 VITE_SENTRY_DSN=
+VITE_SENTRY_RELEASE=ruffl-admin@local
 ```
 
 | Setting | Purpose |
 |---|---|
 | `VITE_API_URL` | Address of the Ruffl backend. `localhost:3000` is correct when both processes run on this computer. |
 | `VITE_BASE_PATH` | URL path from which the website is served. Use `/` locally. |
-| `VITE_SENTRY_DSN` | Optional future error-monitoring destination. Leave it blank locally. |
+| `VITE_SENTRY_DSN` | Optional local Sentry browser DSN. Production should use the admin-dashboard project DSN. |
+| `VITE_SENTRY_RELEASE` | Release label used to connect an error to the deployed code. |
 
 Vite exposes variables beginning with `VITE_` to the browser. They must not contain passwords, private keys, database connection strings, or other secrets.
 
@@ -137,7 +140,7 @@ npm test
 npm run build
 ```
 
-To inspect the production build locally, run `npm run preview` after `npm run build` and open the URL Vite prints. The automated tests currently cover financial calculations used during dispute review.
+To inspect the production build locally, set `VITE_API_URL` to an HTTPS non-localhost URL, run `npm run build`, then run `npm run preview`. The automated tests cover financial calculations used during dispute review. The production build rejects a missing or localhost API URL, preventing a deployment that silently calls the viewer's own computer.
 
 ## Which GitHub workflow should I pick?
 
@@ -180,7 +183,7 @@ In the GitHub repository:
 
 On a personal public repository, Actions is normally already enabled.
 
-### 3. Add the public backend URL
+### 3. Add public production variables
 
 The deployed dashboard cannot use `http://localhost:3000`. On GitHub's servers and in another person's browser, `localhost` means that other computer, not your development computer.
 
@@ -191,10 +194,12 @@ Deploy the backend to a public HTTPS address first. Then:
 3. Select the **Variables** tab.
 4. Select **New repository variable**.
 5. Enter the name `VITE_API_URL`.
-6. Enter the public backend origin as the value, for example `https://api.ruffl.example`.
+6. Enter `https://backend.ruffl.thomaswhite.me`.
 7. Select **Add variable**.
 
 Use a repository **variable**, not a secret. This URL is compiled into public browser files and cannot be hidden.
+
+Create a second repository variable named `VITE_SENTRY_DSN` after creating a separate Sentry browser/React project for the dashboard. Its value is the project's DSN, not a `sntryu_...` API token. The workflow creates `VITE_SENTRY_RELEASE` from the deployed Git commit SHA.
 
 ### 4. Select GitHub Actions for Pages
 
@@ -223,48 +228,34 @@ Select the running job to watch each step. When it succeeds, the deployment page
 
 ## GitHub Pages URL and base path
 
-The included workflow builds for this project-site path:
+Production uses `https://admin.ruffl.thomaswhite.me` at the domain root, so the workflow must keep:
 
-```text
-/Ruffl-Admin-Dashboard/
+```dotenv
+VITE_BASE_PATH=/
 ```
 
-With the GitHub user `thomaswcode`, the expected project-site URL is:
+Do not change it back to `/Ruffl-Admin-Dashboard/`. That repository path caused the custom-domain HTML to request `/Ruffl-Admin-Dashboard/assets/...`, while GitHub Pages served the files under `/assets/...`, producing the blank screen and 404 JavaScript/CSS responses.
 
-```text
-https://thomaswcode.github.io/Ruffl-Admin-Dashboard/
-```
-
-The repository name and capitalisation must match the path. If the GitHub repository has a different name, update `VITE_BASE_PATH` in `.github/workflows/deploy-pages.yml`.
-
-For a custom domain that serves the dashboard at its root:
-
-1. Configure the custom domain in **Settings > Pages** and follow GitHub's DNS instructions.
-2. Change the workflow value to `VITE_BASE_PATH: /`.
-3. Add the custom dashboard origin to the backend's `CORS_ORIGINS`.
-4. Commit and push the workflow change.
-
-Do not change the local `.env` base path merely to fix a GitHub deployment; the deployment workflow supplies its own value.
+If the custom domain is deliberately removed and the repository returns to a GitHub project-site URL, only then set the base to `/Ruffl-Admin-Dashboard/`.
 
 ## Configure backend CORS for the deployed dashboard
 
-The backend must allow the dashboard's browser origin. For the example GitHub Pages project site, the backend setting is:
+The backend must allow the dashboard's exact browser origin:
 
 ```dotenv
-CORS_ORIGINS=http://localhost:5173,https://thomaswcode.github.io
+CORS_ORIGINS=https://admin.ruffl.thomaswhite.me
 ```
 
 - Do not include `/Ruffl-Admin-Dashboard/` in `CORS_ORIGINS`; CORS uses the origin, not the page path.
-- Keep `http://localhost:5173` if local dashboard development is still required.
-- Use the exact custom-domain origin if one is configured.
+- Add `http://localhost:5173` as a second comma-separated origin only when the production backend intentionally supports local dashboard development.
 - Restart or redeploy the backend after changing its environment settings.
 - The backend must use HTTPS when the dashboard uses HTTPS, or browsers will block the request as mixed content.
 
 ## How deployments and checks behave
 
-- A push to `main` runs both CI and the Pages deployment.
+- A push to `main` runs CI. The Pages workflow starts only after that exact commit succeeds.
 - A pull request runs CI but does not deploy that branch.
-- A failed CI workflow does not publish anything.
+- A failed CI workflow does not start a deployment.
 - A failed Pages workflow leaves the previous successful Pages deployment in place.
 - The deployment uses `npm ci`, which installs the exact versions recorded in `package-lock.json`.
 - GitHub may require approval if protection rules were manually added to the `github-pages` environment.
@@ -272,6 +263,7 @@ CORS_ORIGINS=http://localhost:5173,https://thomaswcode.github.io
 ## Moderation behaviour
 
 - Warning, suspension, deletion, and restoration requests use a short-lived CSRF token obtained from the backend.
+- **Anonymize account** removes login/profile identity irreversibly but retains shared commission, dispute, review, and message records needed by counterparties and for audit.
 - The backend denies protected actions immediately after suspension or soft deletion, even if the affected app has not redrawn its screen yet.
 - The mobile app polls account status and checks when returning to the foreground, so warnings and restrictions appear without a manual refresh.
 - The backend remains the security boundary; visual updates are not relied upon for permission enforcement.
@@ -285,7 +277,7 @@ CORS_ORIGINS=http://localhost:5173,https://thomaswcode.github.io
 - **The deployed login says something went wrong:** Confirm the public backend is running over HTTPS, inspect the browser Network tab, and check backend CORS and rate-limit logs.
 - **The browser reports a CORS error:** Add the exact dashboard origin to backend `CORS_ORIGINS` and restart the backend. A URL path is not part of an origin.
 - **A `DELETE` request fails during preflight:** Confirm the deployed backend contains the current CORS method configuration and was restarted after deployment.
-- **The page is blank or assets return 404:** Confirm the repository name matches `/Ruffl-Admin-Dashboard/` or update `VITE_BASE_PATH` in the deployment workflow.
+- **The page is blank or assets return 404:** On the custom domain, confirm generated HTML uses `/assets/...` and the workflow still sets `VITE_BASE_PATH: /`.
 - **Refreshing a dashboard route gives 404:** GitHub Pages is static hosting. This app should use its configured client-side routing/base behaviour; inspect the failed URL and the Vite base if a new route was added.
 - **The workflow cannot deploy to Pages:** Check **Settings > Pages** uses GitHub Actions and that no unexpected `github-pages` environment protection rule is waiting for approval.
 - **Local login returns 403:** Confirm the demo credentials, `SEED_DEMO_DATA=true`, and that the account has not been suspended or deleted.
@@ -297,7 +289,7 @@ CORS_ORIGINS=http://localhost:5173,https://thomaswcode.github.io
 - Never store database passwords, JWT secrets, or service keys in `VITE_*` variables.
 - Only trusted admin accounts should have access to this dashboard.
 - Demo credentials and seeded accounts must be disabled in production.
-- The support inbox lists admin conversations, but the conversation-detail/start-chat UI is not yet implemented.
 - Browser prompts are used for the first moderation and adjudication input flow. Replace them with audited confirmation dialogs before production.
-- Email, push, file storage, and monitoring depend on backend external-service adapters and credentials.
+- Sentry code is installed, but no events can arrive until the `ruffl-admin-dashboard` Sentry project and `VITE_SENTRY_DSN` repository variable exist.
+- Email and push delivery still depend on backend adapters that are not implemented.
 - GitHub Pages hosts only the static dashboard. It does not host the Fastify backend or a database.

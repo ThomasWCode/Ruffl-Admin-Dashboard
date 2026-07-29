@@ -52,6 +52,14 @@ export interface Conversation {
   lastMessage: null | { text: string; createdAt: string };
 }
 
+export interface Message {
+  id: string;
+  conversationId: string;
+  senderId: string;
+  text: string;
+  createdAt: string;
+}
+
 export interface Overview {
   counts: {
     users: number;

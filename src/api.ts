@@ -1,4 +1,4 @@
-import type { Commission, Conversation, Dispute, Overview, User } from './types';
+import type { Commission, Conversation, Dispute, Message, Overview, User } from './types';
 
 const baseUrl = (import.meta.env.VITE_API_URL ?? 'http://localhost:3000').replace(/\/$/, '');
 
@@ -78,6 +78,18 @@ export function createAdminApi(token: string) {
     commissions: () => request<{ commissions: Commission[] }>('/commissions', {}, token),
     disputes: () => request<{ disputes: Dispute[] }>('/admin/disputes', {}, token),
     conversations: () => request<{ conversations: Conversation[] }>('/conversations', {}, token),
+    messages: (conversationId: string) =>
+      request<{ messages: Message[] }>(
+        `/conversations/${conversationId}/messages`,
+        {},
+        token,
+      ),
+    sendMessage: (conversationId: string, text: string) =>
+      mutate<{ message: Message }>(
+        `/conversations/${conversationId}/messages`,
+        'POST',
+        { text },
+      ),
     warn: (userId: string, message: string) =>
       mutate(`/admin/users/${userId}/warn`, 'POST', { message }),
     suspend: (userId: string, hours: number, reason: string) =>
@@ -86,6 +98,11 @@ export function createAdminApi(token: string) {
     softDelete: (userId: string) => mutate(`/admin/users/${userId}`, 'DELETE'),
     permanentlyDelete: (userId: string) =>
       mutate(`/admin/users/${userId}`, 'DELETE', { permanent: true }),
+    startConversation: (userId: string) =>
+      mutate<{ conversation: Conversation }>(
+        `/admin/users/${userId}/conversation`,
+        'POST',
+      ),
     assignDispute: (id: string) => mutate(`/admin/disputes/${id}/assign`, 'POST'),
     resolveDispute: (id: string, outcome: string, resolution: string) =>
       mutate(`/admin/disputes/${id}/resolve`, 'POST', { outcome, resolution }),

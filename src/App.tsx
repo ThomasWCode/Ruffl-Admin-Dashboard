@@ -18,7 +18,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { ApiError, authApi, createAdminApi } from './api';
 import { disputeExposure, formatMoney, sentenceCase } from './lib/format';
-import type { Commission, Conversation, Dispute, Overview, Page, User } from './types';
+import type { Commission, Conversation, Dispute, Message, Overview, Page, User } from './types';
 
 const tokenKey = 'ruffl-admin-token';
 
@@ -337,7 +337,14 @@ function DashboardPage({
       {page === 'disputes' ? (
         <DisputesPage disputes={data.disputes} onRefresh={onRefresh} setError={setError} token={token} />
       ) : null}
-      {page === 'chats' ? <ChatsPage conversations={data.conversations} users={data.users} /> : null}
+      {page === 'chats' ? (
+        <ChatsPage
+          conversations={data.conversations}
+          setError={setError}
+          token={token}
+          users={data.users}
+        />
+      ) : null}
     </div>
   );
 }
@@ -481,6 +488,10 @@ function UsersPage({
                     <div className="actions">
                       <button
                         disabled={busyId === user.id}
+                        onClick={() => void act(user.id, () => api.startConversation(user.id))}
+                        type="button">Start chat</button>
+                      <button
+                        disabled={busyId === user.id}
                         onClick={() => {
                           const message = window.prompt('Warning shown to this user:');
                           if (message?.trim()) void act(user.id, () => api.warn(user.id, message));
@@ -503,11 +514,11 @@ function UsersPage({
                           className="danger-link"
                           disabled={busyId === user.id}
                           onClick={() => {
-                            if (window.confirm('Permanently delete this account and associated data? This cannot be undone.')) {
+                            if (window.confirm('Irreversibly anonymize this account? Login and profile details will be removed, while shared transaction records remain for audit.')) {
                               void act(user.id, () => api.permanentlyDelete(user.id));
                             }
                           }}
-                          type="button">Delete permanently</button>
+                          type="button">Anonymize account</button>
                       ) : (
                         <button
                           className="danger-link"
@@ -636,7 +647,104 @@ function DisputesPage({
   );
 }
 
-function ChatsPage({ conversations, users }: { conversations: Conversation[]; users: User[] }) {
+function ChatsPage({
+  conversations,
+  setError,
+  token,
+  users,
+}: {
+  conversations: Conversation[];
+  setError: (message: string) => void;
+  token: string;
+  users: User[];
+}) {
+  const api = useMemo(() => createAdminApi(token), [token]);
+  const [selectedId, setSelectedId] = useState('');
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [text, setText] = useState('');
+  const [sending, setSending] = useState(false);
+  const selected = conversations.find((conversation) => conversation.id === selectedId);
+
+  const loadMessages = useCallback(async () => {
+    if (!selectedId) return;
+    try {
+      setMessages((await api.messages(selectedId)).messages);
+      setError('');
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not load support messages.');
+    }
+  }, [api, selectedId, setError]);
+
+  useEffect(() => {
+    void loadMessages();
+    if (!selectedId) return;
+    const interval = window.setInterval(() => void loadMessages(), 3_000);
+    return () => window.clearInterval(interval);
+  }, [loadMessages, selectedId]);
+
+  const send = async () => {
+    if (!selectedId || !text.trim()) return;
+    setSending(true);
+    try {
+      const result = await api.sendMessage(selectedId, text);
+      setMessages((current) => [...current, result.message]);
+      setText('');
+      setError('');
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not send this support message.');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  if (selected) {
+    const person = users.find(
+      (user) => user.role !== 'admin' && selected.participantIds.includes(user.id),
+    );
+    return (
+      <section className="panel chat-panel">
+        <header className="panel__header chat-panel__header">
+          <button className="button button--secondary" onClick={() => setSelectedId('')} type="button">
+            Back to inbox
+          </button>
+          <div>
+            <MessageCircle size={19} />
+            <h2>{person?.displayName ?? 'Ruffl user'}</h2>
+          </div>
+        </header>
+        <div className="chat-messages">
+          {messages.map((message) => {
+            const mine = !person || message.senderId !== person.id;
+            return (
+              <div className={mine ? 'chat-message chat-message--mine' : 'chat-message'} key={message.id}>
+                <span>{message.text}</span>
+                <small>{new Date(message.createdAt).toLocaleString('en-GB')}</small>
+              </div>
+            );
+          })}
+          {!messages.length ? <EmptyCopy>No messages yet. Start the conversation below.</EmptyCopy> : null}
+        </div>
+        <form
+          className="chat-composer"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void send();
+          }}>
+          <textarea
+            aria-label="Support message"
+            maxLength={5_000}
+            onChange={(event) => setText(event.target.value)}
+            placeholder="Write a support message"
+            value={text}
+          />
+          <button className="button button--primary" disabled={sending || !text.trim()} type="submit">
+            {sending ? 'Sending…' : 'Send'}
+          </button>
+        </form>
+      </section>
+    );
+  }
+
   return (
     <section className="panel">
       <PanelHeader icon={Headphones} title="User support inbox" />
@@ -646,7 +754,11 @@ function ChatsPage({ conversations, users }: { conversations: Conversation[]; us
             (user) => user.role !== 'admin' && conversation.participantIds.includes(user.id),
           );
           return (
-            <button className="list-row list-row--button" key={conversation.id} type="button">
+            <button
+              className="list-row list-row--button"
+              key={conversation.id}
+              onClick={() => setSelectedId(conversation.id)}
+              type="button">
               <div className="avatar avatar--small">{initials(person?.displayName ?? 'User')}</div>
               <div className="list-row__main">
                 <strong>{person?.displayName ?? 'Ruffl user'}</strong>
