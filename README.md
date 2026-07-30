@@ -223,9 +223,9 @@ Pushing to `main` automatically runs the deployment. You can also run it manuall
 4. Select the `main` branch.
 5. Select the green **Run workflow** button.
 
-The manual button appears only after the workflow containing `workflow_dispatch` is on the default branch. Refresh the page after pushing if it is not immediately visible.
+The manual button appears only after the workflow containing `workflow_dispatch` is on the default branch. Refresh the page after pushing if it is not immediately visible. The deployment job refuses a manual run from any branch other than `main` and reruns lint and tests before publishing.
 
-Select the running job to watch each step. When it succeeds, the deployment page and **Settings > Pages** show the public URL.
+Select the running job to watch each step. When it succeeds, the deployment page and **Settings > Pages** show the public URL. The final smoke check loads the custom-domain JavaScript asset and proves that the deployed bundle uses `https://backend.ruffl.thomaswhite.me`.
 
 ## GitHub Pages URL and base path
 
@@ -259,6 +259,8 @@ CORS_ORIGINS=https://admin.ruffl.thomaswhite.me
 - A failed CI workflow does not start a deployment.
 - A failed Pages workflow leaves the previous successful Pages deployment in place.
 - The deployment uses `npm ci`, which installs the exact versions recorded in `package-lock.json`.
+- A manual deployment is allowed only from `main` and reruns lint and tests before building.
+- Every deployment verifies that the custom-domain root loads a JavaScript asset containing the production backend URL.
 - GitHub may require approval if protection rules were manually added to the `github-pages` environment.
 
 ## Moderation behaviour

@@ -21,7 +21,8 @@ concurrency:
 jobs:
   deploy:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main') ||
       (github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push')
     environment:
@@ -37,6 +38,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - if: github.event_name == 'workflow_dispatch'
+        run: npm run lint
+      - if: github.event_name == 'workflow_dispatch'
+        run: npm test
       - run: npm run build
         env:
           VITE_API_URL: https://backend.ruffl.thomaswhite.me
@@ -49,3 +54,23 @@ jobs:
           path: dist
       - id: deployment
         uses: actions/deploy-pages@v4
+
+      - name: Verify custom-domain bundle
+        env:
+          ADMIN_URL: https://admin.ruffl.thomaswhite.me
+          BACKEND_URL: https://backend.ruffl.thomaswhite.me
+        run: |
+          for attempt in {1..12}; do
+            html="$(curl --fail --silent --show-error "$ADMIN_URL/" || true)"
+            asset_path="$(printf '%s' "$html" | grep --only-matching --extended-regexp 'src="/assets/[^"]+\.js"' | head --lines=1 | cut --delimiter='"' --fields=2 || true)"
+            bundle=""
+            if [ -n "$asset_path" ]; then
+              bundle="$(curl --fail --silent --show-error "$ADMIN_URL$asset_path" || true)"
+            fi
+            if [ -n "$bundle" ] && printf '%s' "$bundle" | grep --fixed-strings --quiet "$BACKEND_URL"; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "The custom-domain JavaScript bundle did not use the production backend."
+          exit 1
