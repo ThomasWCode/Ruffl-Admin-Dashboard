@@ -184,23 +184,23 @@ In the GitHub repository:
 
 On a personal public repository, Actions is normally already enabled.
 
-### 3. Add public production variables
+### 3. Add the public Sentry production variable
 
 The deployed dashboard cannot use `http://localhost:3000`. On GitHub's servers and in another person's browser, `localhost` means that other computer, not your development computer.
 
-Deploy the backend to a public HTTPS address first. Then:
+The included Pages workflow deliberately builds with `VITE_API_URL=https://backend.ruffl.thomaswhite.me`. The URL is non-secret and is kept in the workflow so an incorrectly entered repository variable cannot silently send login requests to the dashboard itself. Change the workflow value only if the backend is intentionally moved to a different HTTPS origin, then update backend CORS at the same time.
+
+After creating a separate Sentry browser/React project for the dashboard:
 
 1. Open the GitHub repository's **Settings**.
 2. Open **Secrets and variables**, then **Actions**.
 3. Select the **Variables** tab.
 4. Select **New repository variable**.
-5. Enter the name `VITE_API_URL`.
-6. Enter `https://backend.ruffl.thomaswhite.me`.
+5. Enter the name `VITE_SENTRY_DSN`.
+6. Enter the dashboard project's DSN.
 7. Select **Add variable**.
 
-Use a repository **variable**, not a secret. This URL is compiled into public browser files and cannot be hidden.
-
-Create a second repository variable named `VITE_SENTRY_DSN` after creating a separate Sentry browser/React project for the dashboard. Its value is the project's DSN, not a `sntryu_...` API token. The workflow creates `VITE_SENTRY_RELEASE` from the deployed Git commit SHA.
+Use a repository **variable**, not a secret. A browser DSN is compiled into public browser files and is not the `sntryu_...` API token. The workflow creates `VITE_SENTRY_RELEASE` from the deployed Git commit SHA.
 
 ### 4. Select GitHub Actions for Pages
 
@@ -279,7 +279,7 @@ CORS_ORIGINS=https://admin.ruffl.thomaswhite.me
 - **No workflow appears in the Actions tab:** Confirm `.github/workflows/deploy-pages.yml` was committed and pushed to the default branch, then check **Settings > Actions > General**.
 - **There is no Run workflow button:** The workflow must be on the default branch and contain `workflow_dispatch`. The supplied file does; push it and refresh GitHub.
 - **GitHub asks which workflow to use:** Choose **GitHub Actions** as the Pages source, but do not generate a starter file. Use the included **Deploy GitHub Pages** workflow.
-- **The deployment uses the wrong backend:** Check the repository variable is named exactly `VITE_API_URL`, then run a new deployment. Changing a variable does not rebuild an existing deployment.
+- **The deployment uses the wrong backend:** Check `VITE_API_URL` in `.github/workflows/deploy-pages.yml`, then push a reviewed workflow correction. The production URL is intentionally set in the workflow rather than a repository variable.
 - **The deployed login says something went wrong:** Confirm the public backend is running over HTTPS, inspect the browser Network tab, and check backend CORS and rate-limit logs.
 - **The browser reports a CORS error:** Add the exact dashboard origin to backend `CORS_ORIGINS` and restart the backend. A URL path is not part of an origin.
 - **A `DELETE` request fails during preflight:** Confirm the deployed backend contains the current CORS method configuration and was restarted after deployment.
