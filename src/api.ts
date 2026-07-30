@@ -25,29 +25,54 @@ export function setSessionFailureHandler(handler: (() => void) | null): void {
   sessionFailureHandler = handler;
 }
 
+function parseJson<T>(text: string): (T & { message?: string; code?: string }) | null {
+  try {
+    return JSON.parse(text) as T & { message?: string; code?: string };
+  } catch {
+    return null;
+  }
+}
+
 async function request<T>(
   path: string,
   options: RequestInit = {},
   token?: string | null,
   csrfToken?: string,
 ): Promise<T> {
-  const response = await fetch(`${baseUrl}${path}`, {
-    ...options,
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
-      ...options.headers,
-    },
-  });
-  const payload = (await response.json()) as T & { message?: string; code?: string };
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}${path}`, {
+      ...options,
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
+        ...options.headers,
+      },
+    });
+  } catch {
+    throw new ApiError(
+      'Could not reach the Ruffl API. Check your connection and try again.',
+      0,
+      'NETWORK_ERROR',
+    );
+  }
+
+  const payload = parseJson<T>(await response.text());
   if (!response.ok) {
     if (response.status === 401 && token) sessionFailureHandler?.();
     throw new ApiError(
-      payload.message ?? 'The request failed.',
+      payload?.message ?? 'The Ruffl API returned an unexpected response. Please try again.',
       response.status,
-      payload.code ?? 'REQUEST_FAILED',
+      payload?.code ?? 'REQUEST_FAILED',
+    );
+  }
+  if (!payload) {
+    throw new ApiError(
+      'The Ruffl API returned an unexpected response. Please try again.',
+      response.status,
+      'INVALID_RESPONSE',
     );
   }
   return payload;
