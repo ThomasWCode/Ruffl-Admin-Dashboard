@@ -3,6 +3,7 @@ import {
   BarChart3,
   CheckCircle2,
   ChevronRight,
+  ClipboardList,
   FolderKanban,
   Headphones,
   LogOut,
@@ -16,9 +17,20 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import { ApiError, authApi, createAdminApi } from './api';
+import { ApiError, authApi, createAdminApi, setSessionFailureHandler } from './api';
 import { disputeExposure, formatMoney, sentenceCase } from './lib/format';
-import type { Commission, Conversation, Dispute, Message, Overview, Page, User } from './types';
+import type {
+  AdminAuditEvent,
+  Commission,
+  Conversation,
+  Dispute,
+  DisputeOutcome,
+  MediaAttachment,
+  Message,
+  Overview,
+  Page,
+  User,
+} from './types';
 
 const tokenKey = 'ruffl-admin-token';
 
@@ -28,6 +40,7 @@ const navigation: { page: Page; label: string; icon: typeof BarChart3 }[] = [
   { page: 'commissions', label: 'Commissions', icon: FolderKanban },
   { page: 'disputes', label: 'Disputes', icon: ShieldCheck },
   { page: 'chats', label: 'Support chats', icon: MessageCircle },
+  { page: 'audit', label: 'Audit trail', icon: ClipboardList },
 ];
 
 interface DashboardData {
@@ -36,6 +49,7 @@ interface DashboardData {
   commissions: Commission[];
   disputes: Dispute[];
   conversations: Conversation[];
+  auditEvents: AdminAuditEvent[];
 }
 
 const emptyData: DashboardData = {
@@ -44,10 +58,16 @@ const emptyData: DashboardData = {
   commissions: [],
   disputes: [],
   conversations: [],
+  auditEvents: [],
 };
 
+type ModerationAction = 'warn' | 'suspend' | 'softDelete' | 'permanentDelete';
+
 export default function App() {
-  const [token, setToken] = useState(() => localStorage.getItem(tokenKey));
+  const [token, setToken] = useState(() => {
+    localStorage.removeItem(tokenKey);
+    return sessionStorage.getItem(tokenKey);
+  });
   const [admin, setAdmin] = useState<User | null>(null);
   const [page, setPage] = useState<Page>('overview');
   const [data, setData] = useState<DashboardData>(emptyData);
@@ -57,6 +77,7 @@ export default function App() {
   const api = useMemo(() => (token ? createAdminApi(token) : null), [token]);
 
   const signOut = useCallback(() => {
+    sessionStorage.removeItem(tokenKey);
     localStorage.removeItem(tokenKey);
     setToken(null);
     setAdmin(null);
@@ -71,12 +92,13 @@ export default function App() {
       if (me.user.role !== 'admin') {
         throw new ApiError('This dashboard is only available to administrators.', 403, 'FORBIDDEN');
       }
-      const [overview, users, commissions, disputes, conversations] = await Promise.all([
+      const [overview, users, commissions, disputes, conversations, audit] = await Promise.all([
         api.overview(),
         api.users(),
         api.commissions(),
         api.disputes(),
         api.conversations(),
+        api.audit(),
       ]);
       setAdmin(me.user);
       setData({
@@ -85,6 +107,7 @@ export default function App() {
         commissions: commissions.commissions,
         disputes: disputes.disputes,
         conversations: conversations.conversations.filter((conversation) => conversation.kind === 'admin'),
+        auditEvents: audit.events,
       });
       setError('');
     } catch (caught) {
@@ -102,12 +125,17 @@ export default function App() {
     void refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    setSessionFailureHandler(signOut);
+    return () => setSessionFailureHandler(null);
+  }, [signOut]);
+
   if (!token || !admin) {
     return (
       <Login
         externalError={error}
         onAuthenticated={(nextToken, user) => {
-          localStorage.setItem(tokenKey, nextToken);
+          sessionStorage.setItem(tokenKey, nextToken);
           setToken(nextToken);
           setAdmin(user);
           setError('');
@@ -314,6 +342,7 @@ function DashboardPage({
     commissions: ['Commissions', 'Read-only financial and lifecycle context across every project.'],
     disputes: ['Disputes', 'Review evidence and costs before making a human decision.'],
     chats: ['Support chats', 'Continue direct support conversations with Ruffl users.'],
+    audit: ['Audit trail', 'Review durable moderation and dispute decisions in newest-first order.'],
   };
   const [title, subtitle] = headings[page];
 
@@ -345,6 +374,7 @@ function DashboardPage({
           users={data.users}
         />
       ) : null}
+      {page === 'audit' ? <AuditPage events={data.auditEvents} users={data.users} /> : null}
     </div>
   );
 }
@@ -355,7 +385,7 @@ function OverviewPage({ data }: { data: DashboardData }) {
     { label: 'Total people', value: overview.counts.users, icon: Users, tone: 'green' },
     { label: 'Active commissions', value: overview.counts.activeCommissions, icon: FolderKanban, tone: 'blue' },
     { label: 'Open disputes', value: overview.counts.openDisputes, icon: ShieldCheck, tone: 'coral' },
-    { label: 'Unread support chats', value: overview.counts.unreadAdminChats, icon: MessageCircle, tone: 'amber' },
+    { label: 'Awaiting support reply', value: overview.counts.unreadAdminChats, icon: MessageCircle, tone: 'amber' },
   ];
 
   return (
@@ -427,6 +457,12 @@ function UsersPage({
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
   const [busyId, setBusyId] = useState('');
+  const [pendingAction, setPendingAction] = useState<{
+    kind: ModerationAction;
+    user: User;
+  } | null>(null);
+  const [message, setMessage] = useState('');
+  const [hours, setHours] = useState('24');
   const api = useMemo(() => createAdminApi(token), [token]);
   const filtered = users.filter(
     (user) =>
@@ -442,16 +478,48 @@ function UsersPage({
     try {
       await action();
       await onRefresh();
+      return true;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Moderation action failed.');
+      return false;
     } finally {
       setBusyId('');
     }
   };
 
+  const openAction = (kind: ModerationAction, user: User) => {
+    setPendingAction({ kind, user });
+    setMessage('');
+    setHours('24');
+  };
+
+  const submitAction = async () => {
+    if (!pendingAction) return;
+    const { kind, user } = pendingAction;
+    const duration = Number(hours);
+    const actions: Record<ModerationAction, () => Promise<unknown>> = {
+      warn: () => api.warn(user.id, message.trim()),
+      suspend: () => api.suspend(user.id, duration, message.trim()),
+      softDelete: () => api.softDelete(user.id),
+      permanentDelete: () => api.permanentlyDelete(user.id),
+    };
+    if (await act(user.id, actions[kind])) setPendingAction(null);
+  };
+
+  const inputIsValid =
+    pendingAction?.kind === 'warn'
+      ? Boolean(message.trim())
+      : pendingAction?.kind === 'suspend'
+        ? Boolean(message.trim()) &&
+          Number(hours) > 0 &&
+          Number(hours) <= 24 * 365 &&
+          Number.isFinite(Number(hours))
+        : Boolean(pendingAction);
+
   return (
-    <section className="panel">
-      <div className="toolbar">
+    <>
+      <section className="panel">
+        <div className="toolbar">
         <div className="search-box">
           <Search aria-hidden="true" size={18} />
           <input
@@ -467,9 +535,9 @@ function UsersPage({
           <option value="suspended">Suspended</option>
           <option value="deleted">Deleted</option>
         </select>
-      </div>
-      <div className="table-wrap">
-        <table>
+        </div>
+        <div className="table-wrap">
+          <table>
           <thead><tr><th>Person</th><th>Role</th><th>Status</th><th>Joined</th><th><span className="sr-only">Actions</span></th></tr></thead>
           <tbody>
             {filtered.map((user) => (
@@ -490,44 +558,27 @@ function UsersPage({
                         disabled={busyId === user.id}
                         onClick={() => void act(user.id, () => api.startConversation(user.id))}
                         type="button">Start chat</button>
-                      <button
-                        disabled={busyId === user.id}
-                        onClick={() => {
-                          const message = window.prompt('Warning shown to this user:');
-                          if (message?.trim()) void act(user.id, () => api.warn(user.id, message));
-                        }}
-                        type="button">Warn</button>
+                      <button disabled={busyId === user.id} onClick={() => openAction('warn', user)} type="button">
+                        Warn
+                      </button>
                       {user.status === 'suspended' ? (
                         <button disabled={busyId === user.id} onClick={() => void act(user.id, () => api.unsuspend(user.id))} type="button">Unsuspend</button>
                       ) : (
-                        <button
-                          disabled={busyId === user.id}
-                          onClick={() => {
-                            const reason = window.prompt('Suspension reason:');
-                            const hours = Number(window.prompt('Suspension duration in hours:', '24'));
-                            if (reason?.trim() && hours > 0) void act(user.id, () => api.suspend(user.id, hours, reason));
-                          }}
-                          type="button">Suspend</button>
+                        <button disabled={busyId === user.id} onClick={() => openAction('suspend', user)} type="button">
+                          Suspend
+                        </button>
                       )}
                       {user.status === 'deleted' ? (
                         <button
                           className="danger-link"
                           disabled={busyId === user.id}
-                          onClick={() => {
-                            if (window.confirm('Irreversibly anonymize this account? Login and profile details will be removed, while shared transaction records remain for audit.')) {
-                              void act(user.id, () => api.permanentlyDelete(user.id));
-                            }
-                          }}
+                          onClick={() => openAction('permanentDelete', user)}
                           type="button">Anonymize account</button>
                       ) : (
                         <button
                           className="danger-link"
                           disabled={busyId === user.id}
-                          onClick={() => {
-                            if (window.confirm('Soft-delete this account? Their data will remain for audit.')) {
-                              void act(user.id, () => api.softDelete(user.id));
-                            }
-                          }}
+                          onClick={() => openAction('softDelete', user)}
                           type="button">Soft-delete</button>
                       )}
                     </div>
@@ -536,10 +587,88 @@ function UsersPage({
               </tr>
             ))}
           </tbody>
-        </table>
-      </div>
-      {!filtered.length ? <EmptyCopy>No users match these filters.</EmptyCopy> : null}
-    </section>
+          </table>
+        </div>
+        {!filtered.length ? <EmptyCopy>No users match these filters.</EmptyCopy> : null}
+      </section>
+      {pendingAction ? (
+        <ActionDialog
+          confirmDisabled={!inputIsValid || busyId === pendingAction.user.id}
+          confirmLabel={
+            pendingAction.kind === 'warn'
+              ? 'Send warning'
+              : pendingAction.kind === 'suspend'
+                ? 'Suspend account'
+                : pendingAction.kind === 'softDelete'
+                  ? 'Soft-delete account'
+                  : 'Anonymize permanently'
+          }
+          danger={pendingAction.kind === 'softDelete' || pendingAction.kind === 'permanentDelete'}
+          onCancel={() => setPendingAction(null)}
+          onConfirm={() => void submitAction()}
+          title={
+            pendingAction.kind === 'warn'
+              ? `Warn ${pendingAction.user.displayName}`
+              : pendingAction.kind === 'suspend'
+                ? `Suspend ${pendingAction.user.displayName}`
+                : pendingAction.kind === 'softDelete'
+                  ? `Soft-delete ${pendingAction.user.displayName}`
+                  : `Anonymize ${pendingAction.user.displayName}`
+          }>
+          {pendingAction.kind === 'warn' ? (
+            <label>
+              Warning shown to the user
+              <textarea
+                autoFocus
+                maxLength={1_000}
+                onChange={(event) => setMessage(event.target.value)}
+                required
+                value={message}
+              />
+            </label>
+          ) : null}
+          {pendingAction.kind === 'suspend' ? (
+            <>
+              <label>
+                Suspension reason
+                <textarea
+                  autoFocus
+                  maxLength={1_000}
+                  onChange={(event) => setMessage(event.target.value)}
+                  required
+                  value={message}
+                />
+              </label>
+              <label>
+                Duration in hours
+                <input
+                  max={24 * 365}
+                  min="1"
+                  onChange={(event) => setHours(event.target.value)}
+                  required
+                  step="1"
+                  type="number"
+                  value={hours}
+                />
+              </label>
+            </>
+          ) : null}
+          {pendingAction.kind === 'softDelete' ? (
+            <p>
+              The account will be blocked immediately, but its identity and shared records will remain available for
+              audit. This action cannot be reversed from this dashboard.
+            </p>
+          ) : null}
+          {pendingAction.kind === 'permanentDelete' ? (
+            <div className="notice notice--error">
+              <AlertTriangle aria-hidden="true" size={18} />
+              Login and profile identity will be irreversibly anonymized. Shared transaction records remain for
+              counterparties and audit.
+            </div>
+          ) : null}
+        </ActionDialog>
+      ) : null}
+    </>
   );
 }
 
@@ -582,22 +711,46 @@ function DisputesPage({
 }) {
   const api = useMemo(() => createAdminApi(token), [token]);
   const [busyId, setBusyId] = useState('');
+  const [pendingDispute, setPendingDispute] = useState<Dispute | null>(null);
+  const [outcome, setOutcome] = useState<DisputeOutcome>('split_decision');
+  const [resolution, setResolution] = useState('');
 
   const act = async (id: string, action: () => Promise<unknown>) => {
     setBusyId(id);
     try {
       await action();
       await onRefresh();
+      return true;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Dispute action failed.');
+      return false;
     } finally {
       setBusyId('');
     }
   };
 
+  const openAdjudication = (dispute: Dispute) => {
+    setPendingDispute(dispute);
+    setOutcome('split_decision');
+    setResolution('');
+  };
+
+  const submitAdjudication = async () => {
+    if (!pendingDispute || !resolution.trim()) return;
+    if (
+      await act(
+        pendingDispute.id,
+        () => api.resolveDispute(pendingDispute.id, outcome, resolution.trim()),
+      )
+    ) {
+      setPendingDispute(null);
+    }
+  };
+
   return (
-    <div className="dispute-grid">
-      {disputes.map((dispute) => {
+    <>
+      <div className="dispute-grid">
+        {disputes.map((dispute) => {
         const exposure = disputeExposure(dispute);
         return (
           <article className="panel dispute-card" key={dispute.id}>
@@ -609,6 +762,21 @@ function DisputesPage({
               <Badge value={dispute.status} />
             </div>
             <p>{dispute.explanation}</p>
+            <div className="evidence-list">
+              {dispute.evidence.map((evidence, index) => (
+                <div className="evidence" key={evidence.id}>
+                  <strong>
+                    Evidence {index + 1} ·{' '}
+                    {evidence.authorId === dispute.raisedById
+                      ? 'reporting party'
+                      : 'other party'}
+                  </strong>
+                  {evidence.message ? <span>{evidence.message}</span> : null}
+                  <AttachmentLinks attachments={evidence.attachments} />
+                  <small>{new Date(evidence.createdAt).toLocaleString('en-GB')}</small>
+                </div>
+              ))}
+            </div>
             <div className="finance-grid">
               <div><span>Commission value</span><strong>{formatMoney(exposure.total)}</strong></div>
               <div><span>Logged materials</span><strong>{formatMoney(exposure.materialCost)}</strong></div>
@@ -623,16 +791,7 @@ function DisputesPage({
                 <button
                   className="button button--primary"
                   disabled={busyId === dispute.id}
-                  onClick={() => {
-                    const outcome = window.prompt(
-                      'Outcome: maker_favoured, commissioner_favoured, split_decision, commission_cancelled, or no_resolution',
-                      'split_decision',
-                    );
-                    const resolution = window.prompt('Required written resolution:');
-                    if (outcome && resolution?.trim()) {
-                      void act(dispute.id, () => api.resolveDispute(dispute.id, outcome, resolution));
-                    }
-                  }}
+                  onClick={() => openAdjudication(dispute)}
                   type="button">Adjudicate</button>
               ) : null}
               {dispute.status === 'resolved' ? (
@@ -641,9 +800,45 @@ function DisputesPage({
             </div>
           </article>
         );
-      })}
-      {!disputes.length ? <section className="panel"><EmptyCopy>No disputes have been raised.</EmptyCopy></section> : null}
-    </div>
+        })}
+        {!disputes.length ? <section className="panel"><EmptyCopy>No disputes have been raised.</EmptyCopy></section> : null}
+      </div>
+      {pendingDispute ? (
+        <ActionDialog
+          confirmDisabled={!resolution.trim() || busyId === pendingDispute.id}
+          confirmLabel="Record decision"
+          onCancel={() => setPendingDispute(null)}
+          onConfirm={() => void submitAdjudication()}
+          title={`Adjudicate ${pendingDispute.commission?.title ?? 'commission dispute'}`}>
+          <label>
+            Outcome
+            <select onChange={(event) => setOutcome(event.target.value as DisputeOutcome)} value={outcome}>
+              <option value="maker_favoured">Maker favoured</option>
+              <option value="commissioner_favoured">Commissioner favoured</option>
+              <option value="split_decision">Split decision</option>
+              <option value="commission_cancelled">Cancel commission</option>
+              <option value="no_resolution">No resolution</option>
+            </select>
+          </label>
+          <label>
+            Written resolution
+            <textarea
+              autoFocus
+              maxLength={5_000}
+              onChange={(event) => setResolution(event.target.value)}
+              required
+              value={resolution}
+            />
+          </label>
+          {outcome === 'commission_cancelled' ? (
+            <div className="notice notice--error">
+              <AlertTriangle aria-hidden="true" size={18} />
+              This outcome cancels the commission. Other outcomes restore it to its exact pre-dispute status.
+            </div>
+          ) : null}
+        </ActionDialog>
+      ) : null}
+    </>
   );
 }
 
@@ -717,7 +912,8 @@ function ChatsPage({
             const mine = !person || message.senderId !== person.id;
             return (
               <div className={mine ? 'chat-message chat-message--mine' : 'chat-message'} key={message.id}>
-                <span>{message.text}</span>
+                {message.text ? <span>{message.text}</span> : null}
+                <AttachmentLinks attachments={message.attachments} />
                 <small>{new Date(message.createdAt).toLocaleString('en-GB')}</small>
               </div>
             );
@@ -762,7 +958,12 @@ function ChatsPage({
               <div className="avatar avatar--small">{initials(person?.displayName ?? 'User')}</div>
               <div className="list-row__main">
                 <strong>{person?.displayName ?? 'Ruffl user'}</strong>
-                <span>{conversation.lastMessage?.text ?? 'No messages yet'}</span>
+                <span>
+                  {conversation.lastMessage?.text ||
+                    (conversation.lastMessage?.attachments.length
+                      ? `${conversation.lastMessage.attachments.length} attachment`
+                      : 'No messages yet')}
+                </span>
               </div>
               <ChevronRight size={18} />
             </button>
@@ -770,6 +971,52 @@ function ChatsPage({
         })}
         {!conversations.length ? <EmptyCopy>No admin support conversations yet.</EmptyCopy> : null}
       </div>
+    </section>
+  );
+}
+
+function AuditPage({
+  events,
+  users,
+}: {
+  events: AdminAuditEvent[];
+  users: User[];
+}) {
+  return (
+    <section className="panel">
+      <PanelHeader icon={ClipboardList} title="Latest 500 admin events" />
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Action</th>
+              <th>Administrator</th>
+              <th>Target</th>
+              <th>Details</th>
+            </tr>
+          </thead>
+          <tbody>
+            {events.map((event) => {
+              const admin = users.find((user) => user.id === event.adminId);
+              const target = users.find((user) => user.id === event.targetUserId);
+              const details = Object.entries(event.details)
+                .map(([key, value]) => `${sentenceCase(key)}: ${String(value)}`)
+                .join(' · ');
+              return (
+                <tr key={event.id}>
+                  <td>{new Date(event.createdAt).toLocaleString('en-GB')}</td>
+                  <td><Badge value={event.action} /></td>
+                  <td>{admin?.displayName ?? event.adminId}</td>
+                  <td>{event.targetUserId ? target?.displayName ?? event.targetUserId : '—'}</td>
+                  <td className="audit-details">{details || '—'}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {!events.length ? <EmptyCopy>No admin actions have been recorded yet.</EmptyCopy> : null}
     </section>
   );
 }
@@ -795,6 +1042,83 @@ function PanelHeader({ icon: Icon, title }: { icon: typeof UserRound; title: str
 
 function EmptyCopy({ children }: { children: React.ReactNode }) {
   return <div className="empty-copy">{children}</div>;
+}
+
+function AttachmentLinks({ attachments }: { attachments: MediaAttachment[] }) {
+  if (!attachments.length) return null;
+  return (
+    <div className="attachment-list">
+      {attachments.map((attachment) => (
+        <a
+          href={attachment.url}
+          key={attachment.url}
+          rel="noreferrer"
+          target="_blank">
+          {attachment.contentType.startsWith('image/') ? (
+            <img alt={attachment.name} src={attachment.url} />
+          ) : (
+            attachment.name
+          )}
+        </a>
+      ))}
+    </div>
+  );
+}
+
+function ActionDialog({
+  children,
+  confirmDisabled,
+  confirmLabel,
+  danger = false,
+  onCancel,
+  onConfirm,
+  title,
+}: {
+  children: React.ReactNode;
+  confirmDisabled: boolean;
+  confirmLabel: string;
+  danger?: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+  title: string;
+}) {
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onCancel();
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [onCancel]);
+
+  return (
+    <div
+      className="modal-backdrop"
+      onMouseDown={(event) => {
+        if (event.currentTarget === event.target) onCancel();
+      }}>
+      <section aria-labelledby="action-dialog-title" aria-modal="true" className="action-dialog" role="dialog">
+        <header>
+          <h2 id="action-dialog-title">{title}</h2>
+          <button aria-label="Close dialog" className="icon-button" onClick={onCancel} type="button">
+            <X aria-hidden="true" size={20} />
+          </button>
+        </header>
+        <div className="action-dialog__body">{children}</div>
+        <footer>
+          <button className="button button--secondary" onClick={onCancel} type="button">
+            Cancel
+          </button>
+          <button
+            className={danger ? 'button button--danger' : 'button button--primary'}
+            disabled={confirmDisabled}
+            onClick={onConfirm}
+            type="button">
+            {confirmLabel}
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
 }
 
 function LoadingPanel() {

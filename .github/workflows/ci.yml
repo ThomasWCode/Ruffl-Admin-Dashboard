@@ -5,9 +5,16 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   validate:
     runs-on: ubuntu-latest
+    env:
+      VITE_API_URL: https://backend.ruffl.thomaswhite.me
+      VITE_BASE_PATH: /
+      VITE_SENTRY_RELEASE: ruffl-admin@test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

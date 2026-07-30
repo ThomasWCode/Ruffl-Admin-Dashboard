@@ -1,6 +1,15 @@
-import type { Commission, Conversation, Dispute, Message, Overview, User } from './types';
+import type {
+  AdminAuditEvent,
+  Commission,
+  Conversation,
+  Dispute,
+  Message,
+  Overview,
+  User,
+} from './types';
 
 const baseUrl = (import.meta.env.VITE_API_URL ?? 'http://localhost:3000').replace(/\/$/, '');
+let sessionFailureHandler: (() => void) | null = null;
 
 export class ApiError extends Error {
   constructor(
@@ -10,6 +19,10 @@ export class ApiError extends Error {
   ) {
     super(message);
   }
+}
+
+export function setSessionFailureHandler(handler: (() => void) | null): void {
+  sessionFailureHandler = handler;
 }
 
 async function request<T>(
@@ -30,6 +43,7 @@ async function request<T>(
   });
   const payload = (await response.json()) as T & { message?: string; code?: string };
   if (!response.ok) {
+    if (response.status === 401 && token) sessionFailureHandler?.();
     throw new ApiError(
       payload.message ?? 'The request failed.',
       response.status,
@@ -75,6 +89,7 @@ export function createAdminApi(token: string) {
         {},
         token,
       ),
+    audit: () => request<{ events: AdminAuditEvent[] }>('/admin/audit', {}, token),
     commissions: () => request<{ commissions: Commission[] }>('/commissions', {}, token),
     disputes: () => request<{ disputes: Dispute[] }>('/admin/disputes', {}, token),
     conversations: () => request<{ conversations: Conversation[] }>('/conversations', {}, token),

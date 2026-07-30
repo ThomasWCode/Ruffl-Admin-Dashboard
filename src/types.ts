@@ -1,4 +1,4 @@
-export type Page = 'overview' | 'users' | 'commissions' | 'disputes' | 'chats';
+export type Page = 'overview' | 'users' | 'commissions' | 'disputes' | 'chats' | 'audit';
 
 export interface User {
   id: string;
@@ -32,11 +32,27 @@ export interface Material {
   costPerUnit: number;
 }
 
+export interface MediaAttachment {
+  url: string;
+  name: string;
+  contentType: string;
+}
+
+export interface DisputeEvidence {
+  id: string;
+  authorId: string;
+  message: string;
+  attachments: MediaAttachment[];
+  createdAt: string;
+}
+
 export interface Dispute {
   id: string;
   commissionId: string;
+  raisedById: string;
   status: 'open' | 'under_review' | 'resolved' | 'closed';
   explanation: string;
+  evidence: DisputeEvidence[];
   outcome?: string;
   resolution?: string;
   createdAt: string;
@@ -44,12 +60,23 @@ export interface Dispute {
   materials: Material[];
 }
 
+export type DisputeOutcome =
+  | 'maker_favoured'
+  | 'commissioner_favoured'
+  | 'split_decision'
+  | 'commission_cancelled'
+  | 'no_resolution';
+
 export interface Conversation {
   id: string;
   kind: 'commission' | 'direct' | 'dispute' | 'admin';
   participantIds: string[];
   commissionId?: string;
-  lastMessage: null | { text: string; createdAt: string };
+  lastMessage: null | {
+    text: string;
+    attachments: MediaAttachment[];
+    createdAt: string;
+  };
 }
 
 export interface Message {
@@ -57,6 +84,16 @@ export interface Message {
   conversationId: string;
   senderId: string;
   text: string;
+  attachments: MediaAttachment[];
+  createdAt: string;
+}
+
+export interface AdminAuditEvent {
+  id: string;
+  adminId: string;
+  targetUserId?: string;
+  action: string;
+  details: Record<string, string | number | boolean | null>;
   createdAt: string;
 }
 

@@ -17,11 +17,12 @@ You do not need prior React, Vite, or GitHub Actions experience to run or deploy
 ## What is implemented
 
 - Admin-only login using the shared backend account system
-- Marketplace totals and recent activity
-- User search, status filtering, warnings, suspension/unsuspension, soft deletion, and guarded anonymization
+- Marketplace totals, recent activity, and support conversations awaiting an admin reply
+- User search, status filtering, validated warning/suspension dialogs, unsuspension, soft deletion, and guarded anonymization
 - Read-only commission and value overview
-- Dispute financial context, assignment, adjudication, and closure
-- Admin support inbox with start-chat, conversation detail, three-second polling, and replies
+- Dispute financial context, submitted evidence/attachment previews, assignment, validated adjudication, pre-dispute workflow restoration, and closure
+- Admin support inbox with start-chat, text/image conversation detail, three-second polling, and replies
+- Durable newest-first audit trail for warnings, suspensions, deletion/anonymization, and dispute decisions
 - Sentry browser error reporting and a readable fatal-error fallback
 - Automatic short-lived CSRF token handling for every state-changing action
 - Responsive desktop/mobile layout
@@ -263,7 +264,12 @@ CORS_ORIGINS=https://admin.ruffl.thomaswhite.me
 ## Moderation behaviour
 
 - Warning, suspension, deletion, and restoration requests use a short-lived CSRF token obtained from the backend.
+- Expired or password-revoked admin bearer sessions are cleared immediately and return the operator to sign-in.
+- The admin bearer token is kept in per-tab `sessionStorage`, not persistent `localStorage`; closing the tab ends the browser session. React escapes displayed user content, but this dashboard must still be limited to trusted operators and kept free of third-party scripts.
+- The generated page has a restrictive content-security policy allowing scripts only from the dashboard itself and API connections only to `VITE_API_URL` plus Sentry ingestion.
+- Moderation and dispute decisions use explicit in-page dialogs with required fields and bounded suspension durations. Destructive actions state their consequences before confirmation.
 - **Anonymize account** removes login/profile identity irreversibly but retains shared commission, dispute, review, and message records needed by counterparties and for audit.
+- Resolving a dispute restores the commission to its exact pre-dispute status unless the selected outcome explicitly cancels it.
 - The backend denies protected actions immediately after suspension or soft deletion, even if the affected app has not redrawn its screen yet.
 - The mobile app polls account status and checks when returning to the foreground, so warnings and restrictions appear without a manual refresh.
 - The backend remains the security boundary; visual updates are not relied upon for permission enforcement.
@@ -289,7 +295,6 @@ CORS_ORIGINS=https://admin.ruffl.thomaswhite.me
 - Never store database passwords, JWT secrets, or service keys in `VITE_*` variables.
 - Only trusted admin accounts should have access to this dashboard.
 - Demo credentials and seeded accounts must be disabled in production.
-- Browser prompts are used for the first moderation and adjudication input flow. Replace them with audited confirmation dialogs before production.
 - Sentry code is installed, but no events can arrive until the `ruffl-admin-dashboard` Sentry project and `VITE_SENTRY_DSN` repository variable exist.
-- Email and push delivery still depend on backend adapters that are not implemented.
+- Transactional email, Expo push ticket/receipt handling, and R2 upload signing are implemented in the backend, but their production credentials and real-device/external-service checks must still be provisioned.
 - GitHub Pages hosts only the static dashboard. It does not host the Fastify backend or a database.

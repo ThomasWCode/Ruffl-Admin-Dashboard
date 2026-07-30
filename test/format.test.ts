@@ -17,8 +17,10 @@ describe('admin financial context', () => {
       disputeExposure({
         id: 'dispute',
         commissionId: 'commission',
+        raisedById: 'a',
         status: 'open',
         explanation: 'Test',
+        evidence: [],
         createdAt: new Date().toISOString(),
         materials: [{ id: '1', item: 'Fur', quantity: 2, unit: 'm', costPerUnit: 40 }],
         commission: {
